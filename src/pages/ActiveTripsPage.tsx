@@ -1,23 +1,34 @@
 import { useEffect, useMemo, useState } from "react";
-import { Trip, TripItem, getTrips, updateTripReturns } from "../apis/client";
+import { Trip, getTrips, updateTripReturns, deleteTrip } from "../apis/client";
 
-type TripStatus = "Out" | "Completed";
+type TripStatus = "ACTIVE" | "COMPLETED" | "UNKNOWN";
+
+const normalizeDate = (d?: any) => {
+  if (!d) return "";
+  if (typeof d === "string") return d.slice(0, 10);
+  try {
+    return new Date(d).toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+};
+
+const todayStr = new Date().toISOString().slice(0, 10);
 
 export default function ActiveTripsPage() {
-  const [selectedDate, setSelectedDate] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
+  const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [savingTripId, setSavingTripId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [savingTripId, setSavingTripId] = useState<string | null>(null);
+  const [deletingTripId, setDeletingTripId] = useState<string | null>(null);
 
   const loadTrips = async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getTrips(selectedDate);
+      const data = await getTrips();
       setTrips(data);
     } catch (err: any) {
       setError(err?.response?.data?.message || "Failed to load trips");
@@ -28,45 +39,32 @@ export default function ActiveTripsPage() {
 
   useEffect(() => {
     loadTrips();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate]);
+  }, []);
 
-  const handleItemChange = (
-    tripId: string,
-    index: number,
-    field: "quantityReturn" | "amountReturned" | "differenceReason",
-    value: number | string
-  ) => {
-    setTrips((prev) =>
-      prev.map((trip) =>
-        trip._id === tripId
-          ? {
-              ...trip,
-              items: trip.items.map((item, i) =>
-                i === index ? { ...item, [field]: value } : item
-              ),
-            }
-          : trip
-      )
-    );
-  };
+  const tripsForDate = useMemo(
+    () =>
+      trips.filter(
+        (t) => normalizeDate((t as any).date) === normalizeDate(selectedDate)
+      ),
+    [trips, selectedDate]
+  );
 
   const computeTripSummary = (trip: Trip) => {
     return trip.items.reduce(
-      (acc, item) => {
-        const sold = Math.max(item.quantityOut - (item.quantityReturn || 0), 0);
-        const price =
-          typeof item.book === "object" && item.book
-            ? (item.book as any).salePrice || 0
-            : 0;
+      (acc, item: any) => {
+        const qtyOut = item.quantityOut ?? 0;
+        const qtyRet = item.quantityReturn ?? 0;
+        const sold = Math.max(qtyOut - qtyRet, 0);
+        const price = item.book?.salePrice ?? 0;
         const expected = sold * price;
-        const diff = (item.amountReturned || 0) - expected;
+        const returnedAmt = item.amountReturned ?? 0;
+        const diff = returnedAmt - expected;
 
-        acc.booksOut += item.quantityOut;
-        acc.booksReturn += item.quantityReturn || 0;
+        acc.booksOut += qtyOut;
+        acc.booksReturn += qtyRet;
         acc.booksSold += sold;
         acc.expectedAmount += expected;
-        acc.amountReturned += item.amountReturned || 0;
+        acc.amountReturned += returnedAmt;
         acc.difference += diff;
         return acc;
       },
@@ -81,13 +79,8 @@ export default function ActiveTripsPage() {
     );
   };
 
-  const getTripStatus = (trip: Trip): TripStatus => {
-    if (trip.status === "COMPLETED") return "Completed";
-    return "Out";
-  };
-
   const pageSummary = useMemo(() => {
-    return trips.reduce(
+    return tripsForDate.reduce(
       (acc, trip) => {
         const sum = computeTripSummary(trip);
         acc.trips += 1;
@@ -109,34 +102,81 @@ export default function ActiveTripsPage() {
         difference: 0,
       }
     );
-  }, [trips]);
+  }, [tripsForDate]);
+
+  const getTripStatus = (trip: Trip): TripStatus => {
+    // const status = (trip as any).status as string | undefined;
+    // if (status === "ACTIVE" || status === "COMPLETED") {
+    //   return status;
+    // }
+    return trip.status;
+  };
+
+  const handleItemChange = (
+    tripId: string,
+    itemIndex: number,
+    field: "quantityReturn" | "amountReturned" | "differenceReason",
+    value: number | string
+  ) => {
+    setTrips((prev) =>
+      prev.map((trip) => {
+        if ((trip as any)._id !== tripId) return trip;
+        const nextItems = trip.items.map((it: any, idx: number) =>
+          idx === itemIndex ? { ...it, [field]: value } : it
+        );
+        return { ...trip, items: nextItems } as Trip;
+      })
+    );
+  };
 
   const handleSaveTripReturns = async (trip: Trip) => {
+    const tripId = (trip as any)._id as string;
     try {
-      setSavingTripId(trip._id);
+      setSavingTripId(tripId);
       setError(null);
 
-      const itemsPayload = trip.items.map((item: TripItem) => {
-        const bookId =
-          typeof item.book === "string" ? item.book : (item.book as any)._id;
-        const boxId =
-          typeof item.box === "string" ? item.box : (item.box as any)._id;
+      const payloadItems = trip.items.map((item: any) => ({
+        bookId:
+          typeof item.book === "string"
+            ? item.book
+            : item.book?._id || item.book,
+        quantityReturn: item.quantityReturn ?? 0,
+        amountReturned: item.amountReturned ?? 0,
+        differenceReason: item.differenceReason ?? "",
+      }));
 
-        return {
-          bookId,
-          boxId,
-          quantityReturn: item.quantityReturn || 0,
-          amountReturned: item.amountReturned || 0,
-          differenceReason: item.differenceReason || "",
-        };
-      });
-
-      await updateTripReturns(trip._id, itemsPayload);
+      await updateTripReturns(tripId, { items: payloadItems });
       await loadTrips();
     } catch (err: any) {
-      setError(err?.response?.data?.message || "Failed to save returns");
+      setError(
+        err?.response?.data?.message || "Failed to save trip returns/amounts"
+      );
     } finally {
       setSavingTripId(null);
+    }
+  };
+
+  const handleDeleteTrip = async (trip: Trip) => {
+    const tripId = (trip as any)._id as string;
+    const distributorName =
+      (trip as any).distributor?.name || "this distributor";
+
+    const ok = window.confirm(
+      `Are you sure you want to delete this trip for ${distributorName}? This will revert stock based on sold quantity.`
+    );
+    if (!ok) return;
+
+    try {
+      setDeletingTripId(tripId);
+      setError(null);
+      await deleteTrip(tripId);
+      // remove from local state (or reload)
+      setTrips((prev) => prev.filter((t: any) => t._id !== tripId));
+      if (expandedTripId === tripId) setExpandedTripId(null);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || "Failed to delete trip");
+    } finally {
+      setDeletingTripId(null);
     }
   };
 
@@ -145,6 +185,15 @@ export default function ActiveTripsPage() {
       <h1 className="text-2xl font-semibold text-slate-900">
         Active Trips / Returns & Amounts
       </h1>
+
+      {loading && (
+        <p className="text-xs text-slate-500">Loading trips for this date...</p>
+      )}
+      {error && (
+        <p className="text-xs text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 inline-block">
+          {error}
+        </p>
+      )}
 
       {/* Filters + summary */}
       <section className="rounded-2xl bg-white border border-slate-100 shadow-sm p-4 space-y-4">
@@ -188,78 +237,81 @@ export default function ActiveTripsPage() {
             />
           </div>
         </div>
-
-        {loading && <p className="text-xs text-slate-500">Loading trips...</p>}
-        {error && (
-          <p className="text-xs text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 inline-block">
-            {error}
-          </p>
-        )}
       </section>
 
       {/* Trips list */}
       <section className="space-y-3">
-        {trips.length === 0 && !loading && (
+        {tripsForDate.length === 0 && !loading && (
           <div className="rounded-2xl bg-white border border-slate-100 shadow-sm p-4 text-sm text-slate-500">
             No trips found for this date.
           </div>
         )}
 
-        {trips.map((trip) => {
+        {tripsForDate.map((trip) => {
+          const tripId = (trip as any)._id as string;
           const summary = computeTripSummary(trip);
           const status = getTripStatus(trip);
-          const isExpanded = expandedTripId === trip._id;
-
+          const isExpanded = expandedTripId === tripId;
           const distributorName =
-            typeof trip.distributor === "object" && trip.distributor
-              ? (trip.distributor as any).name
-              : "Distributor";
+            (trip as any).distributor?.name || "Unknown Distributor";
 
           return (
             <div
-              key={trip._id}
+              key={tripId}
               className="rounded-2xl bg-white border border-slate-100 shadow-sm"
             >
               {/* Trip header row */}
-              <button
-                type="button"
-                onClick={() => setExpandedTripId(isExpanded ? null : trip._id)}
-                className="w-full flex items-center justify-between px-4 py-3 text-left"
-              >
-                <div className="flex flex-col gap-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-slate-900">
-                      {distributorName}
+              <div className="flex items-stretch justify-between px-4 py-3 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setExpandedTripId(isExpanded ? null : tripId)}
+                  className="flex-1 flex items-center justify-between text-left"
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-900">
+                        {distributorName}
+                      </span>
+                      <StatusBadge status={status} />
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Books Out: {summary.booksOut} • Returned:{" "}
+                      {summary.booksReturn} • Sold: {summary.booksSold}
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-0.5 text-xs">
+                    <span className="text-slate-500">
+                      Expected: ₹{summary.expectedAmount.toLocaleString()}
                     </span>
-                    <StatusBadge status={status} />
+                    <span className="text-slate-500">
+                      Returned: ₹{summary.amountReturned.toLocaleString()}
+                    </span>
+                    <span
+                      className={
+                        summary.difference === 0
+                          ? "text-slate-600"
+                          : summary.difference > 0
+                          ? "text-emerald-600"
+                          : "text-rose-600"
+                      }
+                    >
+                      Diff: ₹{summary.difference.toLocaleString()}
+                    </span>
                   </div>
-                  <div className="text-[11px] text-slate-500">
-                    Books Out: {summary.booksOut} • Returned:{" "}
-                    {summary.booksReturn} • Sold: {summary.booksSold}
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-0.5 text-xs">
-                  <span className="text-slate-500">
-                    Expected: ₹{summary.expectedAmount.toLocaleString()}
-                  </span>
-                  <span className="text-slate-500">
-                    Returned: ₹{summary.amountReturned.toLocaleString()}
-                  </span>
-                  <span
-                    className={
-                      summary.difference === 0
-                        ? "text-slate-600"
-                        : summary.difference > 0
-                        ? "text-emerald-600"
-                        : "text-rose-600"
-                    }
-                  >
-                    Diff: ₹{summary.difference.toLocaleString()}
-                  </span>
-                </div>
-              </button>
+                </button>
 
-              {/* Expanded detail: per-book returns */}
+                {/* Delete button on right */}
+                <button
+                  type="button"
+                  onClick={() => handleDeleteTrip(trip)}
+                  className="self-center text-[11px] rounded-lg border border-rose-200 px-3 py-1 text-rose-600 hover:bg-rose-50"
+                  disabled={deletingTripId === tripId}
+                >
+                  {deletingTripId === tripId ? "Deleting..." : "Delete Trip"}
+                </button>
+              </div>
+
+              {/* Expanded detail: per-book returns (editable) */}
               {isExpanded && (
                 <div className="border-t border-slate-100 px-4 py-3 space-y-3">
                   <p className="text-xs text-slate-500">
@@ -267,8 +319,7 @@ export default function ActiveTripsPage() {
                     <strong>
                       book-wise returns, sold, amount, and reasons
                     </strong>{" "}
-                    for this distributor. This clearly shows what books are
-                    returned.
+                    for this distributor.
                   </p>
 
                   <div className="overflow-auto rounded-xl border border-slate-100">
@@ -276,7 +327,6 @@ export default function ActiveTripsPage() {
                       <thead className="bg-slate-50">
                         <tr className="text-left text-[11px] font-medium text-slate-500 uppercase tracking-wide">
                           <th className="px-3 py-2">Book</th>
-                          <th className="px-3 py-2">Box</th>
                           <th className="px-3 py-2">Price</th>
                           <th className="px-3 py-2">Qty Out</th>
                           <th className="px-3 py-2">Qty Return</th>
@@ -288,52 +338,37 @@ export default function ActiveTripsPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {trip.items.map((item, index) => {
-                          const price =
-                            typeof item.book === "object" && item.book
-                              ? (item.book as any).salePrice || 0
-                              : 0;
-                          const sold = Math.max(
-                            item.quantityOut - (item.quantityReturn || 0),
-                            0
-                          );
+                        {trip.items.map((item: any, idx: number) => {
+                          const qtyOut = item.quantityOut ?? 0;
+                          const qtyRet = item.quantityReturn ?? 0;
+                          const sold = Math.max(qtyOut - qtyRet, 0);
+                          const price = item.book?.salePrice ?? 0;
                           const expected = sold * price;
-                          const diff = (item.amountReturned || 0) - expected;
-
-                          const bookName =
-                            typeof item.book === "object" && item.book
-                              ? (item.book as any).productName
-                              : "Book";
-                          const boxName =
-                            typeof item.box === "object" && item.box
-                              ? (item.box as any).boxName
-                              : "Box";
+                          const returnedAmt = item.amountReturned ?? 0;
+                          const diff = returnedAmt - expected;
 
                           return (
-                            <tr key={index}>
+                            <tr key={item._id || idx}>
                               <td className="px-3 py-2 text-slate-800">
-                                {bookName}
+                                {item.book?.productName || "Unknown"}
                               </td>
-                              <td className="px-3 py-2 text-slate-600">
-                                {boxName}
-                              </td>
+
                               <td className="px-3 py-2 text-slate-600">
                                 ₹{price}
                               </td>
                               <td className="px-3 py-2 text-slate-600">
-                                {item.quantityOut}
+                                {qtyOut}
                               </td>
-                              {/* Qty Return (editable) */}
                               <td className="px-3 py-2">
                                 <input
                                   type="number"
                                   min={0}
                                   className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
-                                  value={item.quantityReturn || 0}
+                                  value={qtyRet}
                                   onChange={(e) =>
                                     handleItemChange(
-                                      trip._id,
-                                      index,
+                                      tripId,
+                                      idx,
                                       "quantityReturn",
                                       e.target.value === ""
                                         ? 0
@@ -342,25 +377,22 @@ export default function ActiveTripsPage() {
                                   }
                                 />
                               </td>
-                              {/* Sold (auto) */}
                               <td className="px-3 py-2 text-slate-600">
                                 {sold}
                               </td>
-                              {/* Expected amount (auto) */}
                               <td className="px-3 py-2 text-slate-600">
                                 ₹{expected}
                               </td>
-                              {/* Amount returned (editable) */}
                               <td className="px-3 py-2">
                                 <input
                                   type="number"
                                   min={0}
                                   className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
-                                  value={item.amountReturned || 0}
+                                  value={returnedAmt}
                                   onChange={(e) =>
                                     handleItemChange(
-                                      trip._id,
-                                      index,
+                                      tripId,
+                                      idx,
                                       "amountReturned",
                                       e.target.value === ""
                                         ? 0
@@ -369,7 +401,6 @@ export default function ActiveTripsPage() {
                                   }
                                 />
                               </td>
-                              {/* Difference (auto) */}
                               <td className="px-3 py-2 text-xs">
                                 <span
                                   className={
@@ -383,7 +414,6 @@ export default function ActiveTripsPage() {
                                   ₹{diff}
                                 </span>
                               </td>
-                              {/* Reason (editable) */}
                               <td className="px-3 py-2">
                                 <input
                                   type="text"
@@ -392,8 +422,8 @@ export default function ActiveTripsPage() {
                                   value={item.differenceReason || ""}
                                   onChange={(e) =>
                                     handleItemChange(
-                                      trip._id,
-                                      index,
+                                      tripId,
+                                      idx,
                                       "differenceReason",
                                       e.target.value
                                     )
@@ -407,15 +437,14 @@ export default function ActiveTripsPage() {
                     </table>
                   </div>
 
-                  {/* Save button for this trip */}
-                  <div className="flex justify-end mt-3">
+                  <div className="flex justify-end mt-3 gap-3">
                     <button
                       type="button"
                       onClick={() => handleSaveTripReturns(trip)}
-                      disabled={savingTripId === trip._id}
+                      disabled={savingTripId === tripId}
                       className="inline-flex items-center rounded-xl bg-slate-900 text-white text-xs md:text-sm px-4 py-2 hover:bg-slate-800 disabled:opacity-60"
                     >
-                      {savingTripId === trip._id
+                      {savingTripId === tripId
                         ? "Saving..."
                         : `Save Returns for ${distributorName}`}
                     </button>
@@ -452,12 +481,19 @@ function SummaryChip({
 function StatusBadge({ status }: { status: TripStatus }) {
   const base =
     "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium";
-  if (status === "Completed") {
+  if (status === "COMPLETED") {
     return (
       <span className={`${base} bg-emerald-50 text-emerald-700`}>
         Completed
       </span>
     );
   }
-  return <span className={`${base} bg-amber-50 text-amber-700`}>Out</span>;
+  if (status === "ACTIVE") {
+    return <span className={`${base} bg-amber-50 text-amber-700`}>Active</span>;
+  }
+  return (
+    <span className={`${base} bg-slate-50 text-slate-500`}>
+      {status || "Unknown"}
+    </span>
+  );
 }

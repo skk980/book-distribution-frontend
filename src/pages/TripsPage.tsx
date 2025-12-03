@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Book,
-  Box,
   Distributor,
   getBooks,
-  getBoxes,
   getDistributors,
   createTrip,
 } from "../apis/client";
@@ -12,7 +10,6 @@ import {
 type TripItemForm = {
   id: number;
   bookId: string | "";
-  boxId: string | "";
   quantityOut: number | "";
   quantityReturn: number | ""; // kept for computation compatibility (0 for new trips)
   amountReturned: number | "";
@@ -38,7 +35,6 @@ export default function TripsPage() {
 
   const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
-  const [boxes, setBoxes] = useState<Box[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,14 +44,12 @@ export default function TripsPage() {
     try {
       setLoading(true);
       setError(null);
-      const [distRes, booksRes, boxesRes] = await Promise.all([
+      const [distRes, booksRes] = await Promise.all([
         getDistributors(),
         getBooks(),
-        getBoxes(),
       ]);
       setDistributors(distRes);
       setBooks(booksRes);
-      setBoxes(boxesRes);
     } catch (err: any) {
       setError(err?.response?.data?.message || "Failed to load trip data");
     } finally {
@@ -85,7 +79,6 @@ export default function TripsPage() {
         {
           id: itemIdCounter++,
           bookId: "",
-          boxId: "",
           quantityOut: "",
           quantityReturn: "",
           amountReturned: "",
@@ -196,8 +189,8 @@ export default function TripsPage() {
     }
 
     for (const item of tripForm.items) {
-      if (!item.bookId || !item.boxId) {
-        alert("Each row must have Book and Box selected.");
+      if (!item.bookId) {
+        alert("Each row must have Book selected.");
         return;
       }
       if (!item.quantityOut || item.quantityOut <= 0) {
@@ -216,7 +209,6 @@ export default function TripsPage() {
         remarks: tripForm.remarks || undefined,
         items: tripForm.items.map((item) => ({
           book: item.bookId,
-          box: item.boxId,
           quantityOut:
             typeof item.quantityOut === "number" ? item.quantityOut : 0,
         })),
@@ -249,9 +241,9 @@ export default function TripsPage() {
           Distribution Trips
         </h1>
         <p className="text-xs md:text-sm text-slate-500 max-w-md">
-          Create a distribution trip. Select books from master list, select box,
-          and enter quantities going out. Returns and amounts will be updated
-          later in Active Trips.
+          Create a distribution trip. Select books from master list and enter
+          quantities going out. Returns and amounts will be updated later in
+          Active Trips.
         </p>
       </div>
 
@@ -343,7 +335,6 @@ export default function TripsPage() {
                   <th className="px-3 py-2 min-w-[160px]">Book</th>
                   <th className="px-3 py-2 min-w-[120px]">Subcategory</th>
                   <th className="px-3 py-2 min-w-[80px]">Price</th>
-                  <th className="px-3 py-2 min-w-[120px]">Box</th>
                   <th className="px-3 py-2 min-w-[80px]">Qty Out</th>
                   <th className="px-3 py-2 min-w-[80px] text-right">Actions</th>
                 </tr>
@@ -399,28 +390,6 @@ export default function TripsPage() {
                         <div className="text-xs">
                           {book ? `₹${book.salePrice}` : "—"}
                         </div>
-                      </td>
-
-                      {/* Box select */}
-                      <td className="px-3 py-2">
-                        <select
-                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
-                          value={item.boxId}
-                          onChange={(e) =>
-                            handleItemChange(
-                              item.id,
-                              "boxId",
-                              e.target.value || ""
-                            )
-                          }
-                        >
-                          <option value="">Select box</option>
-                          {boxes.map((box) => (
-                            <option key={box._id} value={box._id}>
-                              {box.boxName}
-                            </option>
-                          ))}
-                        </select>
                       </td>
 
                       {/* Qty Out */}

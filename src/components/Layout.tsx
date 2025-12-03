@@ -8,22 +8,24 @@ export default function Layout() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen flex bg-slate-100">
+    // 🔹 Lock full screen height + prevent page scroll
+    <div className="h-screen flex bg-slate-100 overflow-hidden">
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex md:flex-col w-64 bg-slate-900 text-slate-100 border-r border-slate-800">
+      <aside className="hidden md:flex md:flex-col w-64 bg-slate-900 text-slate-100 border-r border-slate-800 overflow-y-auto">
         <Sidebar onNavigate={() => {}} />
       </aside>
 
       {/* Mobile sidebar overlay */}
       {mobileSidebarOpen && (
-        <div className="fixed inset-0 z-40 flex md:hidden">
+        <div className="fixed inset-0 z-40 flex md:hidden overflow-hidden">
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-black/40"
+            className="absolute inset-0 bg-black/40"
             onClick={() => setMobileSidebarOpen(false)}
           />
+
           {/* Drawer */}
-          <aside className="relative z-50 w-72 max-w-[80%] bg-slate-900 text-slate-100 border-r border-slate-800 flex flex-col">
+          <aside className="relative z-50 w-72 max-w-[80%] h-full bg-slate-900 text-slate-100 border-r border-slate-800 flex flex-col overflow-y-auto">
             <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800">
               <span className="text-lg font-semibold tracking-tight">
                 Book Distribution
@@ -42,10 +44,11 @@ export default function Layout() {
       )}
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         <Topbar onToggleSidebar={() => setMobileSidebarOpen((prev) => !prev)} />
+
+        {/* 🔹 Only page content scrolls */}
         <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
-          {/* All routed pages will render here */}
           <Outlet />
         </main>
       </div>

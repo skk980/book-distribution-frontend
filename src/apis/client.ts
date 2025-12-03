@@ -1,6 +1,8 @@
 // src/apis/client.ts
 import axios from "axios";
 
+// const API_BASE_URL = "https://book-distribution-backend.vercel.app/api";
+
 const API_BASE_URL = "http://localhost:4000/api";
 
 export const api = axios.create({
@@ -46,6 +48,42 @@ export function initAuthFromStorage() {
   }
 }
 
+// ────────────────────────────────────────────────
+// Global axios interceptors
+// ────────────────────────────────────────────────
+
+// Attach Authorization header on each request if token exists (extra safety)
+api.interceptors.request.use(
+  (config) => {
+    if (authToken && !config.headers?.Authorization) {
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${authToken}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// If backend returns 401 → logout + redirect to login
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status;
+
+    if (status === 401) {
+      // Clear token from memory + localStorage + axios defaults
+      setAuthToken(null);
+
+      // Avoid redirect loop: only redirect if not already on /login
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
 export async function registerAdmin(payload: {
   name: string;
   email: string;
@@ -84,20 +122,6 @@ export interface Book {
   updatedAt?: string;
 }
 
-export interface BoxItem {
-  book: string | Book;
-  quantity: number;
-}
-
-export interface Box {
-  _id: string;
-  boxName: string;
-  notes?: string;
-  items: BoxItem[];
-  createdAt?: string;
-  updatedAt?: string;
-}
-
 export interface Distributor {
   _id: string;
   name: string;
@@ -113,7 +137,6 @@ export interface Distributor {
 
 export interface TripItem {
   book: string | Book;
-  box: string | Box;
   quantityOut: number;
   quantityReturn: number;
   amountReturned: number;
@@ -134,7 +157,6 @@ export interface Trip {
 /* For creating trips from frontend Trips page (outbound only) */
 export interface CreateTripItemPayload {
   bookId: string;
-  boxId: string;
   quantityOut: number;
 }
 
@@ -148,7 +170,6 @@ export interface CreateTripPayload {
 /* For updating returns from Active Trips page */
 export interface UpdateTripReturnItemPayload {
   bookId: string;
-  boxId: string;
   quantityReturn: number;
   amountReturned: number;
   differenceReason?: string;
@@ -224,32 +245,6 @@ export async function updateBook(
 }
 
 /* ────────────────────────────────────────────────
-   Boxes API
-   ──────────────────────────────────────────────── */
-
-export async function getBoxes(): Promise<Box[]> {
-  const res = await api.get<Box[]>("/boxes");
-  return res.data;
-}
-
-export async function createBox(payload: {
-  boxName: string;
-  notes?: string;
-  items?: { book: string; quantity: number }[];
-}): Promise<Box> {
-  const res = await api.post<Box>("/boxes", payload);
-  return res.data;
-}
-
-export async function updateBox(
-  id: string,
-  payload: Partial<Pick<Box, "boxName" | "notes" | "items">>
-): Promise<Box> {
-  const res = await api.put<Box>(`/boxes/${id}`, payload);
-  return res.data;
-}
-
-/* ────────────────────────────────────────────────
    Distributors API
    ──────────────────────────────────────────────── */
 
@@ -300,6 +295,11 @@ export async function updateTripReturns(
   return res.data;
 }
 
+export const deleteTrip = async (tripId: string) => {
+  const res = await api.delete(`/trips/${tripId}`);
+  return res.data;
+};
+
 /* ────────────────────────────────────────────────
    Reports API
    ──────────────────────────────────────────────── */
@@ -337,5 +337,10 @@ export async function getDistributorBookReports(
       params: date ? { date } : {},
     }
   );
+  return res.data;
+}
+
+export async function deleteBook(id: string) {
+  const res = await api.delete(`/books/${id}`);
   return res.data;
 }
