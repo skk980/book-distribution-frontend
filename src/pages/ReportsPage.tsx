@@ -18,6 +18,7 @@ type BookLogRow = {
   quantityOut: number;
   quantityReturn: number;
   sold: number;
+  remaining: number; // 👈 NEW
   expectedAmount: number;
   collectedAmount: number;
   difference: number;
@@ -46,9 +47,7 @@ type DistributorBookRow = {
 
 const normalizeDate = (d?: any) => {
   if (!d) return "";
-  // if it’s already a string like "2025-12-02"
   if (typeof d === "string") return d.slice(0, 10);
-  // if it’s a Date object or something else
   try {
     return new Date(d).toISOString().slice(0, 10);
   } catch {
@@ -123,7 +122,6 @@ export default function ReportsPage() {
 
     for (const trip of trips) {
       const distObj: any = (trip as any).distributor;
-      const distributorId = distObj?._id || "unknown";
       const distributorName = distObj?.name || "Unknown Distributor";
       const tripId = (trip as any)._id || "";
       const date = normalizeDate((trip as any).date || (trip as any).createdAt);
@@ -139,6 +137,7 @@ export default function ReportsPage() {
         const quantityOut = item.quantityOut ?? 0;
         const quantityReturn = item.quantityReturn ?? 0;
         const sold = Math.max(quantityOut - quantityReturn, 0);
+        const remaining = Math.max(quantityOut - sold, 0); // 👈 NEW
         const expectedAmount = sold * price;
         const collectedAmount = item.amountReturned ?? 0;
         const difference = collectedAmount - expectedAmount;
@@ -171,6 +170,7 @@ export default function ReportsPage() {
           quantityOut,
           quantityReturn,
           sold,
+          remaining, // 👈 NEW
           expectedAmount,
           collectedAmount,
           difference,
@@ -452,8 +452,10 @@ export default function ReportsPage() {
                                   <th className="px-3 py-1.5">Date</th>
                                   <th className="px-3 py-1.5">Distributor</th>
                                   <th className="px-3 py-1.5">Qty Out</th>
-                                  <th className="px-3 py-1.5">Qty Returned</th>
+
                                   <th className="px-3 py-1.5">Sold</th>
+                                  <th className="px-3 py-1.5">Remaining</th>
+                                  <th className="px-3 py-1.5">Qty Returned</th>
                                   <th className="px-3 py-1.5">
                                     Expected Amount
                                   </th>
@@ -481,11 +483,15 @@ export default function ReportsPage() {
                                     <td className="px-3 py-1.5 text-slate-600">
                                       {row.quantityOut}
                                     </td>
-                                    <td className="px-3 py-1.5 text-slate-600">
-                                      {row.quantityReturn}
-                                    </td>
+
                                     <td className="px-3 py-1.5 text-slate-600">
                                       {row.sold}
+                                    </td>
+                                    <td className="px-3 py-1.5 text-slate-600">
+                                      {row.remaining}
+                                    </td>
+                                    <td className="px-3 py-1.5 text-slate-600">
+                                      {row.quantityReturn}
                                     </td>
                                     <td className="px-3 py-1.5 text-slate-600">
                                       ₹{row.expectedAmount.toLocaleString()}
@@ -511,7 +517,7 @@ export default function ReportsPage() {
                                 {logs.length === 0 && (
                                   <tr>
                                     <td
-                                      colSpan={8}
+                                      colSpan={9}
                                       className="px-3 py-3 text-center text-[11px] text-slate-400"
                                     >
                                       No date-wise logs for this book yet.
