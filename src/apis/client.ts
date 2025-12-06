@@ -170,7 +170,9 @@ export interface CreateTripPayload {
 /* For updating returns from Active Trips page */
 export interface UpdateTripReturnItemPayload {
   bookId: string;
+  quantityOut?: number; // 👈 NEW
   quantityReturn: number;
+  quantitySold: number;
   amountReturned: number;
   differenceReason?: string;
 }

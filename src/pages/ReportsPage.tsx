@@ -17,10 +17,10 @@ type BookLogRow = {
   distributorName: string;
   quantityOut: number;
   quantityReturn: number;
-  sold: number;
-  remaining: number; // 👈 NEW
+  quantitySold: number;
+  remaining: number;
   expectedAmount: number;
-  collectedAmount: number;
+  amountCollected: number;
   difference: number;
 };
 
@@ -53,6 +53,50 @@ const normalizeDate = (d?: any) => {
   } catch {
     return "";
   }
+};
+
+/** Helper: compute metrics per item, same logic as ActiveTrips page */
+const getItemMetrics = (item: any, price: number) => {
+  const quantityOut = item.quantityOut ?? 0;
+  const quantityReturn = item.quantityReturn ?? 0;
+
+  // Books still with distributor (after returns to admin)
+  const itemRemaining = Math.max(quantityOut - quantityReturn, 0);
+
+  // Prefer stored quantitySold; fallback to full remaining if missing
+  let rawSold: number;
+  if (
+    typeof item.quantitySold === "number" &&
+    !Number.isNaN(item.quantitySold)
+  ) {
+    rawSold = item.quantitySold;
+  } else {
+    // fallback logic: assume all remaining are sold, OR you can use 0 if you prefer
+    rawSold = itemRemaining;
+  }
+
+  // clamp sold between 0 and itemRemaining
+  const quantitySold = Math.max(0, Math.min(rawSold, itemRemaining));
+
+  // Remaining with distributor (not yet sold)
+  const remaining = Math.max(itemRemaining - quantitySold, 0);
+
+  // Expected is based on itemRemaining (Qty Out − Qty Return)
+  const expectedAmount = itemRemaining * price;
+
+  const amountCollected = item.amountReturned ?? 0;
+  const difference = amountCollected - expectedAmount;
+
+  return {
+    quantityOut,
+    quantityReturn,
+    itemRemaining,
+    quantitySold,
+    remaining,
+    expectedAmount,
+    amountCollected,
+    difference,
+  };
 };
 
 export default function ReportsPage() {
@@ -93,14 +137,14 @@ export default function ReportsPage() {
     let totalCollected = 0;
 
     for (const trip of trips) {
-      for (const item of trip.items) {
-        const quantityOut = item.quantityOut ?? 0;
-        const quantityReturn = item.quantityReturn ?? 0;
-        const sold = Math.max(quantityOut - quantityReturn, 0);
-        const collected = item.amountReturned ?? 0;
+      for (const item of trip.items as any[]) {
+        const bookObj: any = item.book;
+        const price = bookObj?.salePrice ?? 0;
 
-        totalSold += sold;
-        totalCollected += collected;
+        const { quantitySold, amountCollected } = getItemMetrics(item, price);
+
+        totalSold += quantitySold;
+        totalCollected += amountCollected;
       }
     }
     return { totalSold, totalCollected };
@@ -126,7 +170,7 @@ export default function ReportsPage() {
       const tripId = (trip as any)._id || "";
       const date = normalizeDate((trip as any).date || (trip as any).createdAt);
 
-      for (const item of trip.items) {
+      for (const item of trip.items as any[]) {
         const bookObj: any = item.book;
         if (!bookObj || !bookObj._id) continue;
 
@@ -134,13 +178,15 @@ export default function ReportsPage() {
         const productName = bookObj.productName ?? "Unknown Book";
         const price = bookObj.salePrice ?? 0;
 
-        const quantityOut = item.quantityOut ?? 0;
-        const quantityReturn = item.quantityReturn ?? 0;
-        const sold = Math.max(quantityOut - quantityReturn, 0);
-        const remaining = Math.max(quantityOut - sold, 0); // 👈 NEW
-        const expectedAmount = sold * price;
-        const collectedAmount = item.amountReturned ?? 0;
-        const difference = collectedAmount - expectedAmount;
+        const {
+          quantityOut,
+          quantityReturn,
+          quantitySold,
+          remaining,
+          expectedAmount,
+          amountCollected,
+          difference,
+        } = getItemMetrics(item, price);
 
         // summary
         if (!summaryMap.has(bookId)) {
@@ -157,9 +203,9 @@ export default function ReportsPage() {
         const agg = summaryMap.get(bookId)!;
         agg.totalOut += quantityOut;
         agg.totalReturned += quantityReturn;
-        agg.totalSold += sold;
+        agg.totalSold += quantitySold;
         agg.expectedAmount += expectedAmount;
-        agg.amountCollected += collectedAmount;
+        agg.amountCollected += amountCollected;
 
         // logs
         if (!logsMap[bookId]) logsMap[bookId] = [];
@@ -169,10 +215,10 @@ export default function ReportsPage() {
           distributorName,
           quantityOut,
           quantityReturn,
-          sold,
-          remaining, // 👈 NEW
+          quantitySold,
+          remaining,
           expectedAmount,
-          collectedAmount,
+          amountCollected,
           difference,
         });
       }
@@ -221,20 +267,22 @@ export default function ReportsPage() {
 
       if (!rowsByDistId[distributorId]) rowsByDistId[distributorId] = [];
 
-      for (const item of trip.items) {
+      for (const item of trip.items as any[]) {
         const bookObj: any = item.book;
         if (!bookObj) continue;
 
         const productName = bookObj.productName ?? "Unknown Book";
         const price = bookObj.salePrice ?? 0;
 
-        const quantityOut = item.quantityOut ?? 0;
-        const quantityReturn = item.quantityReturn ?? 0;
-        const totalSold = Math.max(quantityOut - quantityReturn, 0);
-        const expectedAmount = totalSold * price;
-        const amountCollected = item.amountReturned ?? 0;
+        const {
+          quantityOut,
+          quantityReturn,
+          quantitySold,
+          expectedAmount,
+          amountCollected,
+        } = getItemMetrics(item, price);
 
-        agg.booksSold += totalSold;
+        agg.booksSold += quantitySold;
         agg.expectedAmount += expectedAmount;
         agg.amountCollected += amountCollected;
 
@@ -244,9 +292,9 @@ export default function ReportsPage() {
           productName,
           totalOut: quantityOut,
           totalReturned: quantityReturn,
-          totalSold,
+          totalSold: quantitySold,
           expectedAmount,
-          amountCollected,
+          amountCollected: amountCollected,
         });
       }
     }
@@ -452,10 +500,9 @@ export default function ReportsPage() {
                                   <th className="px-3 py-1.5">Date</th>
                                   <th className="px-3 py-1.5">Distributor</th>
                                   <th className="px-3 py-1.5">Qty Out</th>
-
-                                  <th className="px-3 py-1.5">Sold</th>
-                                  <th className="px-3 py-1.5">Remaining</th>
                                   <th className="px-3 py-1.5">Qty Returned</th>
+                                  <th className="px-3 py-1.5">Remaining</th>
+                                  <th className="px-3 py-1.5">Sold</th>
                                   <th className="px-3 py-1.5">
                                     Expected Amount
                                   </th>
@@ -483,21 +530,20 @@ export default function ReportsPage() {
                                     <td className="px-3 py-1.5 text-slate-600">
                                       {row.quantityOut}
                                     </td>
-
                                     <td className="px-3 py-1.5 text-slate-600">
-                                      {row.sold}
+                                      {row.quantityReturn}
                                     </td>
                                     <td className="px-3 py-1.5 text-slate-600">
                                       {row.remaining}
                                     </td>
                                     <td className="px-3 py-1.5 text-slate-600">
-                                      {row.quantityReturn}
+                                      {row.quantitySold}
                                     </td>
                                     <td className="px-3 py-1.5 text-slate-600">
                                       ₹{row.expectedAmount.toLocaleString()}
                                     </td>
                                     <td className="px-3 py-1.5 text-slate-600">
-                                      ₹{row.collectedAmount.toLocaleString()}
+                                      ₹{row.amountCollected.toLocaleString()}
                                     </td>
                                     <td className="px-3 py-1.5 text-[11px]">
                                       <span
@@ -689,10 +735,13 @@ export default function ReportsPage() {
                                         {bRow.totalSold}
                                       </td>
                                       <td className="px-3 py-1.5 text-slate-600">
-                                        ₹{bRow.expectedAmount.toLocaleString()}
+                                        ₹
+                                        {bRow?.expectedAmount?.toLocaleString()}
                                       </td>
                                       <td className="px-3 py-1.5 text-slate-600">
-                                        ₹{bRow.amountCollected.toLocaleString()}
+                                        ₹
+                                        {bRow?.amountCollected?.toLocaleString() ||
+                                          0}
                                       </td>
                                     </tr>
                                   );

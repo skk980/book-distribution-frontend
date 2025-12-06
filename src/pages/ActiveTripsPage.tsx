@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Trip, getTrips, updateTripReturns, deleteTrip } from "../apis/client";
+import { message } from "antd";
 
 type TripStatus = "ACTIVE" | "COMPLETED" | "UNKNOWN";
 
@@ -49,16 +50,21 @@ export default function ActiveTripsPage() {
     [trips, selectedDate]
   );
 
-  /** Use sold from item if present, otherwise derive from qtyOut - qtyRet */
+  /**
+   * Use item.sold if present, otherwise 0.
+   * Clamp to [0, itemRemaining], where itemRemaining = max(qtyOut - qtyReturn, 0)
+   */
   const getSoldForItem = (item: any) => {
     const qtyOut = item.quantityOut ?? 0;
     const qtyRet = item.quantityReturn ?? 0;
-    const rawSold =
-      typeof item.sold === "number" && !Number.isNaN(item.sold)
-        ? item.sold
-        : qtyOut - qtyRet;
+    const itemRemaining = Math.max(qtyOut - qtyRet, 0);
 
-    const safeSold = Math.max(0, Math.min(rawSold, qtyOut));
+    const rawSold =
+      typeof item.quantitySold === "number" && !Number.isNaN(item.quantitySold)
+        ? item.quantitySold
+        : 0;
+
+    const safeSold = Math.max(0, Math.min(rawSold, itemRemaining));
     return safeSold;
   };
 
@@ -67,15 +73,19 @@ export default function ActiveTripsPage() {
       (acc, item: any) => {
         const qtyOut = item.quantityOut ?? 0;
         const qtyRet = item.quantityReturn ?? 0;
-        const sold = getSoldForItem(item); // 👈 use sold logic
+        const itemRemaining = Math.max(qtyOut - qtyRet, 0);
+        const quantitySold = getSoldForItem(item);
         const price = item.book?.salePrice ?? 0;
-        const expected = sold * price;
+
+        // 🔹 expected based on itemRemaining (qtyOut - qtyReturn)
+        const expected = itemRemaining * price;
+
         const returnedAmt = item.amountReturned ?? 0;
         const diff = returnedAmt - expected;
 
         acc.booksOut += qtyOut;
         acc.booksReturn += qtyRet;
-        acc.booksSold += sold;
+        acc.booksSold += quantitySold;
         acc.expectedAmount += expected;
         acc.amountReturned += returnedAmt;
         acc.difference += diff;
@@ -124,7 +134,12 @@ export default function ActiveTripsPage() {
   const handleItemChange = (
     tripId: string,
     itemIndex: number,
-    field: "quantityReturn" | "amountReturned" | "differenceReason" | "sold",
+    field:
+      | "quantityOut"
+      | "quantityReturn"
+      | "amountReturned"
+      | "differenceReason"
+      | "sold",
     value: number | string
   ) => {
     setTrips((prev) =>
@@ -138,7 +153,7 @@ export default function ActiveTripsPage() {
     );
   };
 
-  /** 🔹 Sold input: update sold AND quantityReturn so backend uses quantityReturn */
+  /** 🔹 Sold input: only update sold, clamp 0..itemRemaining */
   const handleItemSoldChange = (
     tripId: string,
     itemIndex: number,
@@ -152,27 +167,67 @@ export default function ActiveTripsPage() {
           if (idx !== itemIndex) return it;
 
           const qtyOut = it.quantityOut ?? 0;
+          const qtyRet = it.quantityReturn ?? 0;
+          const itemRemaining = Math.max(qtyOut - qtyRet, 0);
+
           if (rawValue === "") {
-            // empty = treat as 0 sold
-            const newSold = 0;
-            const newQtyReturn = qtyOut; // everything returned
             return {
               ...it,
-              sold: newSold,
-              quantityReturn: newQtyReturn,
+              quantitySold: 0,
             };
           }
 
           let parsed = Number(rawValue);
           if (Number.isNaN(parsed)) parsed = 0;
 
-          const safeSold = Math.max(0, Math.min(parsed, qtyOut));
-          const newQtyReturn = qtyOut - safeSold;
+          const safeSold = Math.max(0, Math.min(parsed, itemRemaining));
 
           return {
             ...it,
-            sold: safeSold,
-            quantityReturn: newQtyReturn,
+            quantitySold: safeSold,
+          };
+        });
+
+        return { ...trip, items: nextItems } as Trip;
+      })
+    );
+  };
+
+  /** 🔹 Qty Out input: adjust qtyOut, clamp sold to new itemRemaining */
+  const handleQtyOutChange = (
+    tripId: string,
+    itemIndex: number,
+    rawValue: string
+  ) => {
+    setTrips((prev) =>
+      prev.map((trip) => {
+        if ((trip as any)._id !== tripId) return trip;
+
+        const nextItems = (trip.items as any[]).map((it: any, idx: number) => {
+          if (idx !== itemIndex) return it;
+
+          let newQtyOut: number;
+          if (rawValue === "") {
+            newQtyOut = 0;
+          } else {
+            const parsed = Number(rawValue);
+            newQtyOut = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+          }
+
+          const qtyRet = it.quantityReturn ?? 0;
+          const itemRemaining = Math.max(newQtyOut - qtyRet, 0);
+
+          const currentSold =
+            typeof it.quantitySold === "number" &&
+            !Number.isNaN(it.quantitySold)
+              ? it.quantitySold
+              : 0;
+          const safeSold = Math.max(0, Math.min(currentSold, itemRemaining));
+
+          return {
+            ...it,
+            quantityOut: newQtyOut,
+            quantitySold: safeSold, // 👈 fix field name
           };
         });
 
@@ -192,12 +247,15 @@ export default function ActiveTripsPage() {
           typeof item.book === "string"
             ? item.book
             : item.book?._id || item.book,
-        quantityReturn: item.quantityReturn ?? 0, // already updated from sold
+        quantityOut: item.quantityOut ?? 0,
+        quantityReturn: item.quantityReturn ?? 0,
+        quantitySold: item.quantitySold ?? 0,
         amountReturned: item.amountReturned ?? 0,
         differenceReason: item.differenceReason ?? "",
       }));
 
-      await updateTripReturns(tripId, { items: payloadItems });
+      await updateTripReturns(tripId, payloadItems);
+      message.success("Saved");
       await loadTrips();
     } catch (err: any) {
       setError(
@@ -368,9 +426,11 @@ export default function ActiveTripsPage() {
                   <p className="text-xs text-slate-500">
                     Update{" "}
                     <strong>
-                      book-wise returns, sold, amount, and reasons
+                      qty out, qty return, sold, amount, and reasons
                     </strong>{" "}
-                    for this distributor.
+                    for this distributor. Expected is based on{" "}
+                    <strong>Qty Out − Qty Return</strong>, Remaining is{" "}
+                    <strong>item remaining − sold</strong>.
                   </p>
 
                   <div className="overflow-auto rounded-xl border border-slate-100">
@@ -380,10 +440,10 @@ export default function ActiveTripsPage() {
                           <th className="px-3 py-2">Book</th>
                           <th className="px-3 py-2">Price</th>
                           <th className="px-3 py-2">Qty Out</th>
-
-                          <th className="px-3 py-2">Sold</th>
-                          <th className="px-3 py-2">Remaining</th>
                           <th className="px-3 py-2">Qty Return</th>
+                          {/* 🔹 Remaining column moved after Qty Return */}
+                          <th className="px-3 py-2">Remaining</th>
+                          <th className="px-3 py-2">Sold</th>
                           <th className="px-3 py-2">Expected</th>
                           <th className="px-3 py-2">Amount Returned</th>
                           <th className="px-3 py-2">Difference</th>
@@ -394,10 +454,14 @@ export default function ActiveTripsPage() {
                         {(trip.items as any[]).map((item: any, idx: number) => {
                           const qtyOut = item.quantityOut ?? 0;
                           const qtyRet = item.quantityReturn ?? 0;
-                          const sold = getSoldForItem(item);
-                          const remaining = Math.max(qtyOut - sold, 0);
+                          const itemRemaining = Math.max(qtyOut - qtyRet, 0); // qty out - qty return
+                          const quantitySold = getSoldForItem(item);
+                          const remaining = Math.max(
+                            itemRemaining - quantitySold,
+                            0
+                          ); // 🔹 Remaining = itemRemaining - sold
                           const price = item.book?.salePrice ?? 0;
-                          const expected = sold * price;
+                          const expected = itemRemaining * price; // 🔹 Expected based on itemRemaining
                           const returnedAmt = item.amountReturned ?? 0;
                           const diff = returnedAmt - expected;
 
@@ -411,19 +475,15 @@ export default function ActiveTripsPage() {
                                 ₹{price}
                               </td>
 
-                              <td className="px-3 py-2 text-slate-600">
-                                {qtyOut}
-                              </td>
-
-                              {/* Sold (editable) */}
+                              {/* Qty Out (editable) */}
                               <td className="px-3 py-2">
                                 <input
                                   type="number"
                                   min={0}
                                   className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
-                                  value={sold}
+                                  value={qtyOut}
                                   onChange={(e) =>
-                                    handleItemSoldChange(
+                                    handleQtyOutChange(
                                       tripId,
                                       idx,
                                       e.target.value
@@ -432,11 +492,7 @@ export default function ActiveTripsPage() {
                                 />
                               </td>
 
-                              {/* Remaining (read-only) */}
-                              <td className="px-3 py-2 text-slate-600">
-                                {remaining}
-                              </td>
-                              {/* Qty Return (editable but driven by Sold changes too) */}
+                              {/* Qty Return (editable) */}
                               <td className="px-3 py-2">
                                 <input
                                   type="number"
@@ -456,6 +512,28 @@ export default function ActiveTripsPage() {
                                 />
                               </td>
 
+                              {/* Remaining (auto) */}
+                              <td className="px-3 py-2 text-slate-600">
+                                {remaining}
+                              </td>
+
+                              {/* Sold (editable) */}
+                              <td className="px-3 py-2">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
+                                  value={quantitySold}
+                                  onChange={(e) =>
+                                    handleItemSoldChange(
+                                      tripId,
+                                      idx,
+                                      e.target.value
+                                    )
+                                  }
+                                />
+                              </td>
+
                               {/* Expected (auto) */}
                               <td className="px-3 py-2 text-slate-600">
                                 ₹{expected}
@@ -465,7 +543,6 @@ export default function ActiveTripsPage() {
                               <td className="px-3 py-2">
                                 <input
                                   type="number"
-                                  min={0}
                                   className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
                                   value={returnedAmt}
                                   onChange={(e) =>
