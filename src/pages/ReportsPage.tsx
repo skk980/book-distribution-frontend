@@ -31,6 +31,8 @@ type DistributorSummary = {
   booksSold: number;
   expectedAmount: number;
   amountCollected: number;
+  cashAmount: number;
+  onlineAmount: number;
   difference: number;
 };
 
@@ -43,6 +45,8 @@ type DistributorBookRow = {
   totalSold: number;
   expectedAmount: number;
   amountCollected: number;
+  cashAmount: number; // 🔹 NEW
+  onlineAmount: number; // 🔹 NEW
 };
 
 const normalizeDate = (d?: any) => {
@@ -71,7 +75,6 @@ const getItemMetrics = (item: any, price: number) => {
   ) {
     rawSold = item.quantitySold;
   } else {
-    // fallback logic: assume all remaining are sold, OR you can use 0 if you prefer
     rawSold = itemRemaining;
   }
 
@@ -135,8 +138,17 @@ export default function ReportsPage() {
   const overall = useMemo(() => {
     let totalSold = 0;
     let totalCollected = 0;
+    let totalCash = 0;
+    let totalOnline = 0;
 
     for (const trip of trips) {
+      const t: any = trip;
+      const cash = t.cashAmount ?? 0;
+      const online = t.onlineAmount ?? 0;
+
+      totalCash += cash;
+      totalOnline += online;
+
       for (const item of trip.items as any[]) {
         const bookObj: any = item.book;
         const price = bookObj?.salePrice ?? 0;
@@ -147,7 +159,7 @@ export default function ReportsPage() {
         totalCollected += amountCollected;
       }
     }
-    return { totalSold, totalCollected };
+    return { totalSold, totalCollected, totalCash, totalOnline };
   }, [trips]);
 
   /* -----------------------------
@@ -250,6 +262,7 @@ export default function ReportsPage() {
       const distributorName = distObj?.name || "Unknown Distributor";
       const tripId = (trip as any)._id || "";
       const date = normalizeDate(trip.date);
+      const t: any = trip;
 
       if (!summaryMap.has(distributorId)) {
         summaryMap.set(distributorId, {
@@ -259,11 +272,18 @@ export default function ReportsPage() {
           booksSold: 0,
           expectedAmount: 0,
           amountCollected: 0,
+          cashAmount: 0,
+          onlineAmount: 0,
           difference: 0,
         });
       }
       const agg = summaryMap.get(distributorId)!;
       agg.tripsCount += 1;
+
+      const cash = t.cashAmount ?? 0;
+      const online = t.onlineAmount ?? 0;
+      agg.cashAmount += cash;
+      agg.onlineAmount += online;
 
       if (!rowsByDistId[distributorId]) rowsByDistId[distributorId] = [];
 
@@ -294,12 +314,13 @@ export default function ReportsPage() {
           totalReturned: quantityReturn,
           totalSold: quantitySold,
           expectedAmount,
-          amountCollected: amountCollected,
+          amountCollected,
+          cashAmount: cash, // 🔹 same trip-level cash
+          onlineAmount: online, // 🔹 same trip-level online
         });
       }
     }
 
-    // compute difference & sort summaries
     const summaries = Array.from(summaryMap.values()).map((s) => ({
       ...s,
       difference: s.amountCollected - s.expectedAmount,
@@ -309,7 +330,6 @@ export default function ReportsPage() {
       a.distributorName.localeCompare(b.distributorName)
     );
 
-    // sort inner rows by date desc
     Object.values(rowsByDistId).forEach((rows) =>
       rows.sort((a, b) => (a.date < b.date ? 1 : -1))
     );
@@ -364,11 +384,27 @@ export default function ReportsPage() {
                 ₹{overall.totalCollected.toLocaleString()}
               </div>
             </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500 font-medium">
+                Total Cash
+              </div>
+              <div className="text-sm font-semibold text-slate-900">
+                ₹{overall.totalCash.toLocaleString()}
+              </div>
+            </div>
+            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500 font-medium">
+                Total Online
+              </div>
+              <div className="text-sm font-semibold text-slate-900">
+                ₹{overall.totalOnline.toLocaleString()}
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* Global date filter (for Per Distributor -> Per Book details) */}
+      {/* Global date filter */}
       <section className="rounded-2xl border border-slate-100 bg-white shadow-sm p-4 space-y-3">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
@@ -403,7 +439,7 @@ export default function ReportsPage() {
         </div>
       </section>
 
-      {/* Per Book Summary (overall) with nested logs */}
+      {/* Per Book Summary (overall) */}
       <section className="rounded-2xl border border-slate-100 bg-white shadow-sm p-4 space-y-3">
         <h2 className="text-sm font-semibold text-slate-900">
           Per Book Summary (Overall)
@@ -617,6 +653,8 @@ export default function ReportsPage() {
                 <th className="px-3 py-2">Books Sold</th>
                 <th className="px-3 py-2">Expected</th>
                 <th className="px-3 py-2">Collected</th>
+                <th className="px-3 py-2">Cash</th>
+                <th className="px-3 py-2">Online</th>
                 <th className="px-3 py-2">Difference</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
@@ -660,6 +698,12 @@ export default function ReportsPage() {
                       <td className="px-3 py-2 text-slate-600">
                         ₹{d.amountCollected.toLocaleString()}
                       </td>
+                      <td className="px-3 py-2 text-slate-600">
+                        ₹{d.cashAmount.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">
+                        ₹{d.onlineAmount.toLocaleString()}
+                      </td>
                       <td className="px-3 py-2 text-xs">
                         <span
                           className={
@@ -691,7 +735,7 @@ export default function ReportsPage() {
 
                     {isExpanded && (
                       <tr>
-                        <td colSpan={7} className="px-3 py-3 bg-slate-50/60">
+                        <td colSpan={9} className="px-3 py-3 bg-slate-50/60">
                           <div className="rounded-xl border border-slate-200 bg-white overflow-auto">
                             <table className="min-w-full text-[11px] sm:text-xs">
                               <thead className="bg-slate-50">
@@ -707,6 +751,8 @@ export default function ReportsPage() {
                                     Expected Amount
                                   </th>
                                   <th className="px-3 py-1.5">Collected</th>
+                                  <th className="px-3 py-1.5">Cash</th>
+                                  <th className="px-3 py-1.5">Online</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100">
@@ -735,13 +781,16 @@ export default function ReportsPage() {
                                         {bRow.totalSold}
                                       </td>
                                       <td className="px-3 py-1.5 text-slate-600">
-                                        ₹
-                                        {bRow?.expectedAmount?.toLocaleString()}
+                                        ₹{bRow.expectedAmount.toLocaleString()}
                                       </td>
                                       <td className="px-3 py-1.5 text-slate-600">
-                                        ₹
-                                        {bRow?.amountCollected?.toLocaleString() ||
-                                          0}
+                                        ₹{bRow.amountCollected.toLocaleString()}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-slate-600">
+                                        ₹{bRow.cashAmount.toLocaleString()}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-slate-600">
+                                        ₹{bRow.onlineAmount.toLocaleString()}
                                       </td>
                                     </tr>
                                   );
@@ -749,7 +798,7 @@ export default function ReportsPage() {
                                 {filteredRows.length === 0 && (
                                   <tr>
                                     <td
-                                      colSpan={7}
+                                      colSpan={9}
                                       className="px-3 py-3 text-center text-[11px] text-slate-400"
                                     >
                                       No per-book data for this distributor on
@@ -769,7 +818,7 @@ export default function ReportsPage() {
               {!loading && distributorData.summaries.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={9}
                     className="px-3 py-4 text-center text-xs text-slate-400"
                   >
                     No distributor data yet.

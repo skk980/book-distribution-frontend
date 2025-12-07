@@ -16,32 +16,18 @@ const normalizeDate = (d?: any) => {
 
 const todayStr = new Date().toISOString().slice(0, 10);
 
+/** Group shape used for UI */
 type TripGroup = {
-  groupName: string | null;
-  date: string;
+  groupName: string | null; // null => not a named group
   trips: Trip[];
 };
 
-/** Safely get distributor name(s) */
+/** Safely get distributor name (single distributor) */
 const getDistributorName = (trip: any) => {
-  // Normal single distributor (your current main case)
-  if (
-    trip.distributor &&
-    typeof trip.distributor === "object" &&
-    trip.distributor.name
-  ) {
-    return trip.distributor.name;
-  }
+  const d = trip.distributor;
 
-  // Only if distributors is an array of *objects with name* (not plain ids)
-  if (Array.isArray(trip.distributors) && trip.distributors.length > 0) {
-    const names = trip.distributors
-      .map((d: any) => (d && typeof d === "object" ? d.name : null))
-      .filter(Boolean);
-
-    if (names.length > 0) {
-      return names.join(", ");
-    }
+  if (d && typeof d === "object" && d.name) {
+    return d.name;
   }
 
   return "Unknown Distributor";
@@ -73,6 +59,7 @@ export default function ActiveTripsPage() {
     loadTrips();
   }, []);
 
+  /** Trips filtered by date */
   const tripsForDate = useMemo(
     () =>
       trips.filter(
@@ -81,6 +68,7 @@ export default function ActiveTripsPage() {
     [trips, selectedDate]
   );
 
+  /** Compute safe sold quantity for a trip item */
   const getSoldForItem = (item: any) => {
     const qtyOut = item.quantityOut ?? 0;
     const qtyRet = item.quantityReturn ?? 0;
@@ -95,6 +83,7 @@ export default function ActiveTripsPage() {
     return safeSold;
   };
 
+  /** Per-trip summary */
   const computeTripSummary = (trip: Trip) => {
     return (trip.items as any[]).reduce(
       (acc, item: any) => {
@@ -127,6 +116,7 @@ export default function ActiveTripsPage() {
     );
   };
 
+  /** Page summary (all trips for the selected date) */
   const pageSummary = useMemo(() => {
     return tripsForDate.reduce(
       (acc, trip) => {
@@ -152,27 +142,30 @@ export default function ActiveTripsPage() {
     );
   }, [tripsForDate]);
 
+  /** Map backend status to local TripStatus */
   const getTripStatus = (trip: Trip): TripStatus => {
     if (trip.status === "COMPLETED") return "COMPLETED";
     if (trip.status === "OUT") return "ACTIVE";
     return "UNKNOWN";
   };
 
-  // Group trips by (groupName + date) for group UI
+  /** Helper: key to group trips by groupName */
+  const groupKeyForTrip = (trip: Trip) => {
+    const g = (trip as any).groupName || "";
+    if (!g.trim()) return `single:${(trip as any)._id}`;
+    return `group:${g.trim()}`;
+  };
+
+  /** Group trips for grouping UI */
   const groupedTrips = useMemo<TripGroup[]>(() => {
     const map = new Map<string, TripGroup>();
 
     tripsForDate.forEach((trip) => {
-      const t: any = trip;
-      const gName = (t.groupName || "").trim();
-      const key = gName ? `group:${gName}_${t.date}` : `single:${t._id}`;
+      const key = groupKeyForTrip(trip);
+      const gName = ((trip as any).groupName || "").trim() || null;
 
       if (!map.has(key)) {
-        map.set(key, {
-          groupName: gName || null,
-          date: t.date,
-          trips: [],
-        });
+        map.set(key, { groupName: gName, trips: [] });
       }
       map.get(key)!.trips.push(trip);
     });
@@ -202,6 +195,7 @@ export default function ActiveTripsPage() {
     );
   };
 
+  /** Sold input */
   const handleItemSoldChange = (
     tripId: string,
     itemIndex: number,
@@ -241,6 +235,7 @@ export default function ActiveTripsPage() {
     );
   };
 
+  /** Qty Out input */
   const handleQtyOutChange = (
     tripId: string,
     itemIndex: number,
@@ -283,6 +278,29 @@ export default function ActiveTripsPage() {
     );
   };
 
+  /** 🔹 Cash / Online change */
+  const handleCashOrOnlineChange = (
+    tripId: string,
+    field: "cashAmount" | "onlineAmount",
+    rawValue: string
+  ) => {
+    setTrips((prev) =>
+      prev.map((trip) => {
+        if ((trip as any)._id !== tripId) return trip;
+
+        let val: number;
+        if (rawValue === "") {
+          val = 0;
+        } else {
+          const parsed = Number(rawValue);
+          val = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+        }
+
+        return { ...(trip as any), [field]: val } as Trip;
+      })
+    );
+  };
+
   const handleSaveTripReturns = async (trip: Trip) => {
     const tripId = (trip as any)._id as string;
     try {
@@ -301,7 +319,12 @@ export default function ActiveTripsPage() {
         differenceReason: item.differenceReason ?? "",
       }));
 
-      await updateTripReturns(tripId, payloadItems);
+      await updateTripReturns(tripId, {
+        items: payloadItems,
+        cashAmount: (trip as any).cashAmount ?? 0,
+        onlineAmount: (trip as any).onlineAmount ?? 0,
+      });
+
       message.success("Saved");
       await loadTrips();
     } catch (err: any) {
@@ -394,7 +417,7 @@ export default function ActiveTripsPage() {
         </div>
       </section>
 
-      {/* Grouped trips list */}
+      {/* Trips grouped list */}
       <section className="space-y-3">
         {groupedTrips.length === 0 && !loading && (
           <div className="rounded-2xl bg-white border border-slate-100 shadow-sm p-4 text-sm text-slate-500">
@@ -402,9 +425,14 @@ export default function ActiveTripsPage() {
           </div>
         )}
 
-        {groupedTrips.map((group, index) => {
-          const isGroup =
-            group.groupName && group.trips && group.trips.length > 1;
+        {groupedTrips.map((group, groupIndex) => {
+          const isGroup = group.trips.length > 1;
+          const firstTrip: any = group.trips[0] || {};
+          const groupLabel =
+            group.groupName ||
+            (isGroup
+              ? `Group #${groupIndex + 1}`
+              : getDistributorName(firstTrip));
 
           const groupSummary = group.trips.reduce(
             (acc, trip) => {
@@ -427,19 +455,14 @@ export default function ActiveTripsPage() {
             }
           );
 
-          const firstTrip: any = group.trips[0] || {};
-          const groupLabel = isGroup
-            ? group.groupName || `Group #${index + 1}`
-            : getDistributorName(firstTrip);
-
           return (
             <div
-              key={(group.groupName || "single") + "_" + index}
+              key={groupLabel + groupIndex}
               className="rounded-2xl bg-white border border-slate-100 shadow-sm"
             >
               {/* Group header */}
               {isGroup && (
-                <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-1 md:flex-row md:items-center md:justify-between bg-slate-50/70">
+                <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-1 md:flex-row md:items-center md:justify-between bg-slate-50/60">
                   <div className="flex flex-col">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                       Group Trip
@@ -473,7 +496,7 @@ export default function ActiveTripsPage() {
                 </div>
               )}
 
-              {/* Inner distributor trips */}
+              {/* Each distributor trip in this group */}
               <div className="divide-y divide-slate-100">
                 {group.trips.map((trip) => {
                   const tripId = (trip as any)._id as string;
@@ -482,9 +505,15 @@ export default function ActiveTripsPage() {
                   const isExpanded = expandedTripId === tripId;
                   const distributorName = getDistributorName(trip as any);
 
+                  const cash = (trip as any).cashAmount ?? 0;
+                  const online = (trip as any).onlineAmount ?? 0;
+                  const totalReturned = summary.amountReturned;
+                  const cashOnlineTotal = cash + online;
+                  const diffFromReturned = cashOnlineTotal - totalReturned;
+
                   return (
                     <div key={tripId}>
-                      {/* Trip header for each distributor in this group */}
+                      {/* Trip header row */}
                       <div className="flex items-stretch justify-between px-4 py-3 gap-3">
                         <button
                           type="button"
@@ -494,13 +523,13 @@ export default function ActiveTripsPage() {
                           className="flex-1 flex items-center justify-between text-left"
                         >
                           <div className="flex flex-col gap-0.5">
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-2">
                               <span className="text-sm font-semibold text-slate-900">
                                 {distributorName}
                               </span>
-                              {isGroup && (
-                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
-                                  Group: {groupLabel}
+                              {group.groupName && (
+                                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+                                  Group: {group.groupName}
                                 </span>
                               )}
                               <StatusBadge status={status} />
@@ -533,27 +562,30 @@ export default function ActiveTripsPage() {
                           </div>
                         </button>
 
+                        {/* Delete button */}
                         <button
                           type="button"
                           onClick={() => handleDeleteTrip(trip)}
                           className="self-center text-[11px] rounded-lg border border-rose-200 px-3 py-1 text-rose-600 hover:bg-rose-50"
                           disabled={deletingTripId === tripId}
                         >
-                          {deletingTripId === tripId ? "Deleting..." : "Delete"}
+                          {deletingTripId === tripId
+                            ? "Deleting..."
+                            : "Delete Trip"}
                         </button>
                       </div>
 
-                      {/* Expanded per-book editable table */}
+                      {/* Expanded detail */}
                       {isExpanded && (
                         <div className="border-t border-slate-100 px-4 py-3 space-y-3">
                           <p className="text-xs text-slate-500">
                             Update{" "}
                             <strong>
-                              qty out, qty return, sold, amount, and reasons
+                              qty out, qty return, sold, amount, reasons, and
+                              cash / online split
                             </strong>{" "}
                             for this distributor. Expected is based on{" "}
-                            <strong>Qty Out − Qty Return</strong>, Remaining is{" "}
-                            <strong>item remaining − sold</strong>.
+                            <strong>Qty Out − Qty Return</strong>.
                           </p>
 
                           <div className="overflow-auto rounded-xl border border-slate-100">
@@ -725,17 +757,80 @@ export default function ActiveTripsPage() {
                             </table>
                           </div>
 
-                          <div className="flex justify-end mt-3 gap-3">
-                            <button
-                              type="button"
-                              onClick={() => handleSaveTripReturns(trip)}
-                              disabled={savingTripId === tripId}
-                              className="inline-flex items-center rounded-xl bg-slate-900 text-white text-xs md:text-sm px-4 py-2 hover:bg-slate-800 disabled:opacity-60"
-                            >
-                              {savingTripId === tripId
-                                ? "Saving..."
-                                : `Save Returns for ${distributorName}`}
-                            </button>
+                          {/* 🔹 Cash / Online split UI */}
+                          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mt-3">
+                            <div className="flex flex-wrap gap-4 text-xs md:text-sm">
+                              <div className="flex flex-col gap-1">
+                                <span className="text-[11px] uppercase tracking-wide text-slate-500 font-medium">
+                                  Cash
+                                </span>
+                                <input
+                                  type="number"
+                                  className="w-32 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
+                                  value={cash}
+                                  onChange={(e) =>
+                                    handleCashOrOnlineChange(
+                                      tripId,
+                                      "cashAmount",
+                                      e.target.value
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <span className="text-[11px] uppercase tracking-wide text-slate-500 font-medium">
+                                  Online
+                                </span>
+                                <input
+                                  type="number"
+                                  className="w-32 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
+                                  value={online}
+                                  onChange={(e) =>
+                                    handleCashOrOnlineChange(
+                                      tripId,
+                                      "onlineAmount",
+                                      e.target.value
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1 text-[11px] text-slate-600">
+                                <span className="font-medium">
+                                  Cash + Online: ₹{cashOnlineTotal}
+                                </span>
+                                <span>
+                                  Returned total: ₹
+                                  {totalReturned.toLocaleString()}
+                                </span>
+                                {diffFromReturned !== 0 && (
+                                  <span
+                                    className={
+                                      diffFromReturned === 0
+                                        ? "text-slate-600"
+                                        : diffFromReturned > 0
+                                        ? "text-emerald-600"
+                                        : "text-rose-600"
+                                    }
+                                  >
+                                    Difference from returned: ₹
+                                    {diffFromReturned.toLocaleString()}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex justify-end gap-3">
+                              <button
+                                type="button"
+                                onClick={() => handleSaveTripReturns(trip)}
+                                disabled={savingTripId === tripId}
+                                className="inline-flex items-center rounded-xl bg-slate-900 text-white text-xs md:text-sm px-4 py-2 hover:bg-slate-800 disabled:opacity-60"
+                              >
+                                {savingTripId === tripId
+                                  ? "Saving..."
+                                  : `Save Returns for ${distributorName}`}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}

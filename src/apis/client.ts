@@ -150,6 +150,8 @@ export interface Trip {
   remarks?: string;
   status: "OUT" | "COMPLETED";
   items: TripItem[];
+  cashAmount?: number; // 🔹 NEW
+  onlineAmount?: number; // 🔹 NEW
   createdAt?: string;
   updatedAt?: string;
 }
@@ -289,11 +291,17 @@ export async function getTrips(date?: string): Promise<Trip[]> {
   return res.data;
 }
 
+export interface UpdateTripReturnsPayload {
+  items: UpdateTripReturnItemPayload[];
+  cashAmount?: number;
+  onlineAmount?: number;
+}
+
 export async function updateTripReturns(
   tripId: string,
-  items: UpdateTripReturnItemPayload[]
+  payload: UpdateTripReturnsPayload
 ): Promise<Trip> {
-  const res = await api.patch<Trip>(`/trips/${tripId}/returns`, { items });
+  const res = await api.patch<Trip>(`/trips/${tripId}/returns`, payload);
   return res.data;
 }
 
