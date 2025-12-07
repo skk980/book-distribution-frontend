@@ -1,9 +1,13 @@
 // src/apis/client.ts
 import axios from "axios";
 
-// const API_BASE_URL = "https://book-distribution-backend.vercel.app/api";
+const API_BASE_URL_PROD = "https://book-distribution-backend.vercel.app/api";
 
-const API_BASE_URL = "http://localhost:4000/api";
+const API_BASE_URL_LOCAL = "http://localhost:4000/api";
+
+const API_BASE_URL = process.env.NODE_ENV = "production" ? API_BASE_URL_PROD : API_BASE_URL_LOCAL
+
+
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
