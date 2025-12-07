@@ -4,22 +4,24 @@ import {
   Distributor,
   getBooks,
   getDistributors,
-  createTrip,
+  // we won't use createTrip here, we'll call api.post directly
+  api,
 } from "../apis/client";
+import { Select, message } from "antd";
+
+const { Option } = Select;
 
 type TripItemForm = {
   id: number;
   bookId: string | "";
   quantityOut: number | "";
-  quantityReturn: number | ""; // kept for computation compatibility (0 for new trips)
-  amountReturned: number | "";
-  differenceReason: string;
 };
 
 type TripForm = {
-  distributorId: string | "";
+  distributors: string[]; // multi-select
   date: string;
   remarks: string;
+  groupName: string;
   items: TripItemForm[];
 };
 
@@ -27,9 +29,10 @@ let itemIdCounter = 1;
 
 export default function TripsPage() {
   const [tripForm, setTripForm] = useState<TripForm>({
-    distributorId: "",
+    distributors: [],
     date: new Date().toISOString().slice(0, 10),
     remarks: "",
+    groupName: "",
     items: [],
   });
 
@@ -38,6 +41,9 @@ export default function TripsPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isGroupTrip = tripForm.distributors.length > 1;
+  const isSingleTrip = tripForm.distributors.length === 1;
 
   // Load master data
   const loadMasters = async () => {
@@ -61,9 +67,9 @@ export default function TripsPage() {
     loadMasters();
   }, []);
 
-  const handleChangeTripField = (
-    field: keyof TripForm,
-    value: TripForm[typeof field]
+  const handleChangeTripField = <K extends keyof TripForm>(
+    field: K,
+    value: TripForm[K]
   ) => {
     setTripForm((prev) => ({
       ...prev,
@@ -80,9 +86,6 @@ export default function TripsPage() {
           id: itemIdCounter++,
           bookId: "",
           quantityOut: "",
-          quantityReturn: "",
-          amountReturned: "",
-          differenceReason: "",
         },
       ],
     }));
@@ -118,84 +121,57 @@ export default function TripsPage() {
       ? books.find((b) => b._id === id) ?? null
       : null;
 
-  const rowComputed = (item: TripItemForm) => {
-    const book = getBookById(item.bookId);
-    const quantityOut =
-      typeof item.quantityOut === "number" ? item.quantityOut : 0;
-    const quantityReturn =
-      typeof item.quantityReturn === "number" ? item.quantityReturn : 0;
-    const sold = Math.max(quantityOut - quantityReturn, 0);
-    const price = book?.salePrice ?? 0;
-    const expectedAmount = sold * price;
-    const amountReturned =
-      typeof item.amountReturned === "number" ? item.amountReturned : 0;
-    const difference = amountReturned - expectedAmount;
-
-    return {
-      book,
-      sold,
-      expectedAmount,
-      difference,
-    };
-  };
-
+  // Summary for display (for single distributor trips, uses quantityOut; for group, it's all 0)
   const summary = useMemo(() => {
     return tripForm.items.reduce(
       (acc, item) => {
-        const { sold, expectedAmount, difference } = rowComputed(item);
+        const book = getBookById(item.bookId);
         const quantityOut =
           typeof item.quantityOut === "number" ? item.quantityOut : 0;
-        const quantityReturn =
-          typeof item.quantityReturn === "number" ? item.quantityReturn : 0;
-        const amountReturned =
-          typeof item.amountReturned === "number" ? item.amountReturned : 0;
+        const price = book?.salePrice ?? 0;
+        const expected = quantityOut * price;
 
         acc.totalBooksOut += quantityOut;
-        acc.totalBooksReturn += quantityReturn;
-        acc.totalBooksSold += sold;
-        acc.expectedAmount += expectedAmount;
-        acc.amountReturned += amountReturned;
-        acc.difference += difference;
+        acc.expectedAmount += expected;
 
         return acc;
       },
       {
         totalBooksOut: 0,
-        totalBooksReturn: 0,
-        totalBooksSold: 0,
         expectedAmount: 0,
-        amountReturned: 0,
-        difference: 0,
       }
     );
-  }, [tripForm.items]);
+  }, [tripForm.items, books]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!tripForm.distributorId) {
-      alert("Please select a distributor.");
+    if (tripForm.distributors.length === 0) {
+      message.error("Please select at least one distributor.");
       return;
     }
 
     if (!tripForm.date) {
-      alert("Please select a date.");
+      message.error("Please select a date.");
       return;
     }
 
     if (tripForm.items.length === 0) {
-      alert("Please add at least one book item.");
+      message.error("Please add at least one book item.");
       return;
     }
 
     for (const item of tripForm.items) {
       if (!item.bookId) {
-        alert("Each row must have Book selected.");
+        message.error("Each row must have a book selected.");
         return;
       }
-      if (!item.quantityOut || item.quantityOut <= 0) {
-        alert("Each row must have a valid Quantity Out.");
-        return;
+      if (!isGroupTrip) {
+        const qty = typeof item.quantityOut === "number" ? item.quantityOut : 0;
+        if (!qty || qty <= 0) {
+          message.error("Each row must have a valid Quantity Out.");
+          return;
+        }
       }
     }
 
@@ -203,23 +179,39 @@ export default function TripsPage() {
       setSaving(true);
       setError(null);
 
-      const payload = {
-        distributor: tripForm.distributorId,
+      const itemsPayload = tripForm.items.map((item) => ({
+        book: item.bookId,
+        quantityOut: isGroupTrip
+          ? 0
+          : typeof item.quantityOut === "number"
+          ? item.quantityOut
+          : 0,
+      }));
+
+      let payload: any = {
         date: tripForm.date,
         remarks: tripForm.remarks || undefined,
-        items: tripForm.items.map((item) => ({
-          book: item.bookId,
-          quantityOut:
-            typeof item.quantityOut === "number" ? item.quantityOut : 0,
-        })),
+        items: itemsPayload,
       };
 
-      await createTrip(payload);
+      if (isGroupTrip) {
+        payload.distributors = tripForm.distributors;
+        payload.groupName = tripForm.groupName || undefined;
+      } else if (isSingleTrip) {
+        payload.distributor = tripForm.distributors[0];
+      }
 
-      alert("Trip saved successfully!");
+      // Call backend directly (matches your current /trips POST route)
+      await api.post("/trips", payload);
+
+      message.success("Trip(s) saved successfully!");
       handleReset();
     } catch (err: any) {
       setError(err?.response?.data?.message || "Failed to save trip");
+      message.error(
+        err?.response?.data?.message || "Failed to save trip. Check console."
+      );
+      console.error(err);
     } finally {
       setSaving(false);
     }
@@ -227,9 +219,10 @@ export default function TripsPage() {
 
   const handleReset = () => {
     setTripForm({
-      distributorId: "",
+      distributors: [],
       date: new Date().toISOString().slice(0, 10),
       remarks: "",
+      groupName: "",
       items: [],
     });
   };
@@ -241,9 +234,9 @@ export default function TripsPage() {
           Distribution Trips
         </h1>
         <p className="text-xs md:text-sm text-slate-500 max-w-md">
-          Create a distribution trip. Select books from master list and enter
-          quantities going out. Returns and amounts will be updated later in
-          Active Trips.
+          Create a distribution trip. For group trips, select multiple
+          distributors and all books will start with Qty Out = 0. Each
+          distributor will later fill their own distribution in Active Trips.
         </p>
       </div>
 
@@ -262,29 +255,40 @@ export default function TripsPage() {
         onSubmit={handleSubmit}
         className="space-y-6 rounded-2xl bg-white border border-slate-100 shadow-sm p-4 md:p-6"
       >
+        {/* Trip Info */}
         <section className="space-y-4">
           <h2 className="text-lg font-semibold text-slate-900">Trip Info</h2>
           <div className="grid gap-4 md:grid-cols-3">
-            <div className="flex flex-col gap-1">
+            {/* Distributor(s) - Antd Multi Select */}
+            <div className="flex flex-col gap-1 md:col-span-1">
               <label className="text-xs font-medium text-slate-600">
-                Distributor <span className="text-rose-500">*</span>
+                Distributor(s) <span className="text-rose-500">*</span>
               </label>
-              <select
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900/70 outline-none"
-                value={tripForm.distributorId}
-                onChange={(e) =>
-                  handleChangeTripField("distributorId", e.target.value || "")
+              <Select
+                mode="multiple"
+                allowClear
+                className="w-full text-sm"
+                placeholder="Select one or multiple distributors"
+                value={tripForm.distributors}
+                onChange={(vals) =>
+                  handleChangeTripField("distributors", vals as string[])
                 }
               >
-                <option value="">Select distributor</option>
                 {distributors.map((d) => (
-                  <option key={d._id} value={d._id}>
+                  <Option key={d._id} value={d._id}>
                     {d.name}
-                  </option>
+                  </Option>
                 ))}
-              </select>
+              </Select>
+              {isGroupTrip && (
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Group trip: Qty Out will be set to 0 for all books. Each
+                  distributor will fill their own details later.
+                </p>
+              )}
             </div>
 
+            {/* Date */}
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">
                 Date <span className="text-rose-500">*</span>
@@ -297,6 +301,7 @@ export default function TripsPage() {
               />
             </div>
 
+            {/* Remarks */}
             <div className="flex flex-col gap-1 md:col-span-1">
               <label className="text-xs font-medium text-slate-600">
                 Remarks
@@ -311,9 +316,31 @@ export default function TripsPage() {
                 }
               />
             </div>
+
+            {/* Group Name (only meaningful for group trips) */}
+            <div className="flex flex-col gap-1 md:col-span-3">
+              <label className="text-xs font-medium text-slate-600">
+                Group Name (for multi-distributor trips)
+              </label>
+              <input
+                type="text"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900/70 outline-none"
+                placeholder="e.g. Bikaji Nagar Sankirtan"
+                value={tripForm.groupName}
+                onChange={(e) =>
+                  handleChangeTripField("groupName", e.target.value)
+                }
+              />
+              {isGroupTrip && !tripForm.groupName && (
+                <p className="text-[11px] text-amber-600">
+                  It is recommended to give a group name for easy tracking.
+                </p>
+              )}
+            </div>
           </div>
         </section>
 
+        {/* Books Table */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-900">
@@ -335,7 +362,9 @@ export default function TripsPage() {
                   <th className="px-3 py-2 min-w-[160px]">Book</th>
                   <th className="px-3 py-2 min-w-[120px]">Subcategory</th>
                   <th className="px-3 py-2 min-w-[80px]">Price</th>
-                  <th className="px-3 py-2 min-w-[80px]">Qty Out</th>
+                  <th className="px-3 py-2 min-w-[80px]">
+                    {isGroupTrip ? "Qty Out (fixed)" : "Qty Out"}
+                  </th>
                   <th className="px-3 py-2 min-w-[80px] text-right">Actions</th>
                 </tr>
               </thead>
@@ -352,7 +381,7 @@ export default function TripsPage() {
                 )}
 
                 {tripForm.items.map((item) => {
-                  const { book } = rowComputed(item);
+                  const book = getBookById(item.bookId);
 
                   return (
                     <tr key={item.id} className="align-top">
@@ -394,21 +423,25 @@ export default function TripsPage() {
 
                       {/* Qty Out */}
                       <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          min={0}
-                          className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
-                          value={item.quantityOut}
-                          onChange={(e) =>
-                            handleItemChange(
-                              item.id,
-                              "quantityOut",
-                              e.target.value === ""
-                                ? ""
-                                : Number(e.target.value)
-                            )
-                          }
-                        />
+                        {isGroupTrip ? (
+                          <div className="text-xs text-slate-500">0</div>
+                        ) : (
+                          <input
+                            type="number"
+                            min={0}
+                            className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:ring-2 focus:ring-slate-900/60 outline-none"
+                            value={item.quantityOut}
+                            onChange={(e) =>
+                              handleItemChange(
+                                item.id,
+                                "quantityOut",
+                                e.target.value === ""
+                                  ? ""
+                                  : Number(e.target.value)
+                              )
+                            }
+                          />
+                        )}
                       </td>
 
                       {/* Remove */}
@@ -429,6 +462,7 @@ export default function TripsPage() {
           </div>
         </section>
 
+        {/* Summary + Actions */}
         <section className="grid gap-4 md:grid-cols-[2fr,1fr] items-start">
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
             <h3 className="text-sm font-semibold text-slate-900 mb-3">
@@ -437,11 +471,13 @@ export default function TripsPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs md:text-sm">
               <SummaryItem
                 label="Total Books Out"
-                value={summary.totalBooksOut}
+                value={isGroupTrip ? 0 : summary.totalBooksOut}
               />
               <SummaryItem
                 label="Expected Amount (approx.)"
-                value={`₹${summary.expectedAmount}`}
+                value={
+                  isGroupTrip ? "₹0 (group trip)" : `₹${summary.expectedAmount}`
+                }
               />
             </div>
           </div>
